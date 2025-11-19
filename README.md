@@ -39,4 +39,6 @@ data/
 docs/
   mvp.md
   architecture.md
+  scenario.md
+
 
