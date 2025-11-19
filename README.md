@@ -17,7 +17,7 @@ Agentic RAG 기반 경제 뉴스 요약 시스템
 - LangChain / LangGraph
 - ElasticSearch
 - SQLite
-- Streamlit (또는 FastAPI + 프런트엔드)
+- Streamlit (또는 FastAPI + Frontend)
 - OpenAI API 또는 기타 LLM API
 
 ## 폴더 구조 (초안)
@@ -40,5 +40,6 @@ docs/
   mvp.md
   architecture.md
   scenario.md
+
 
 
