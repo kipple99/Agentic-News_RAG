@@ -1,5 +1,3 @@
-﻿# Agentic News RAG (8조)
-
 # Agentic News RAG (8조)
 
 Agentic RAG 기반 경제 뉴스 요약 시스템  
@@ -41,3 +39,4 @@ data/
 docs/
   mvp.md
   architecture.md
+
