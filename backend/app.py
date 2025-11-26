@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Agentic News RAG Backend Server
-에이전트가 뉴스 검색 vs LLM 생성을 자동 판단
+통합 LangGraph 에이전트 시스템 사용 (이미지 워크플로우 기반)
 """
 
 from fastapi import FastAPI, HTTPException
@@ -13,18 +13,30 @@ import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# 타입 힌트를 위한 임시 타입
+# 통합 에이전트 시스템 import (우선)
+INTEGRATED_AGENT_AVAILABLE = False
+try:
+    from rag.integrated_graph import initialize_agent_system, run_query
+    INTEGRATED_AGENT_AVAILABLE = True
+    print("[OK] Integrated agent system available")
+except ImportError as e:
+    print(f"Warning: Integrated agent not available: {e}")
+    print("Falling back to simple news_agent...")
+    INTEGRATED_AGENT_AVAILABLE = False
+
+# 폴백: 기존 news_agent (통합 에이전트가 없을 때)
 NewsAgent = Any
 create_news_agent = None
 AGENT_AVAILABLE = False
 
-try:
-    from agent.news_agent import create_news_agent, NewsAgent
-    AGENT_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Agent not available: {e}")
-    print("Please install required packages: pip install langchain langchain-core langchain-community langchain-openai")
-    AGENT_AVAILABLE = False
+if not INTEGRATED_AGENT_AVAILABLE:
+    try:
+        from agent.news_agent import create_news_agent, NewsAgent
+        AGENT_AVAILABLE = True
+    except ImportError as e:
+        print(f"Warning: Agent not available: {e}")
+        print("Please install required packages: pip install langchain langchain-core langchain-community langchain-openai")
+        AGENT_AVAILABLE = False
 
 app = FastAPI(title="Agentic News RAG API", version="1.0.0")
 
@@ -36,15 +48,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 통합 에이전트 시스템 (우선)
+_graph = None
+_llm = None
+_es_client = None
+_embedder = None
+
+# 폴백: 기존 에이전트
 _agent: Optional[Any] = None
 
+def get_integrated_agent():
+    """통합 에이전트 시스템 초기화 및 반환"""
+    global _graph, _llm, _es_client, _embedder
+    
+    if _graph is None:
+        if not INTEGRATED_AGENT_AVAILABLE:
+            raise HTTPException(
+                status_code=503, 
+                detail="Integrated agent not available. Please check if required packages are installed."
+            )
+        try:
+            _graph, _llm, _es_client, _embedder = initialize_agent_system(
+                es_index="rag_news_db",
+                llm_model_type="gemini"
+            )
+            print("[OK] Integrated agent system initialized successfully")
+        except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"Error initializing integrated agent: {error_detail}")
+            raise HTTPException(
+                status_code=503, 
+                detail=f"Failed to initialize integrated agent: {str(e)}"
+            )
+    return _graph
+
 def get_agent() -> Any:
+    """기존 에이전트 (폴백용)"""
     global _agent
     if _agent is None:
         if not AGENT_AVAILABLE:
             raise HTTPException(status_code=503, detail="Agent not available. Please check if langchain packages are installed.")
         try:
-            # OpenAI 사용 (config.py에서 API 키 가져옴)
             _agent = create_news_agent(model_type="openai", model_name="gpt-3.5-turbo", use_memory=True)
             print("Agent initialized successfully")
         except Exception as e:
@@ -60,53 +105,114 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
-    method: str  # "api_search" or "llm_generate"
+    method: str  # "api_search", "llm_generate", or "integrated_rag"
+    sub_queries: Optional[List[str]] = None
+    is_relevant_enough: Optional[bool] = None
+    relevance_score: Optional[float] = None
+    es_results_count: Optional[int] = None
+    naver_results_count: Optional[int] = None
 
 @app.get("/health")
 async def health_check():
     """헬스 체크 엔드포인트"""
-    agent_status = "available" if AGENT_AVAILABLE else "unavailable"
-    if AGENT_AVAILABLE:
+    # 통합 에이전트 우선 확인
+    if INTEGRATED_AGENT_AVAILABLE:
+        agent_status = "available"
         try:
-            # 에이전트 초기화 시도
-            if _agent is None:
-                get_agent()
-            agent_status = "initialized" if _agent is not None else "available"
+            if _graph is None:
+                get_integrated_agent()
+            agent_status = "initialized" if _graph is not None else "available"
         except:
             agent_status = "error"
-    
-    return {
-        "status": "healthy",
-        "agent_available": AGENT_AVAILABLE,
-        "agent_status": agent_status
-    }
+        
+        return {
+            "status": "healthy",
+            "agent_available": True,
+            "agent_status": agent_status,
+            "agent_type": "integrated_rag"
+        }
+    else:
+        # 폴백: 기존 에이전트
+        agent_status = "available" if AGENT_AVAILABLE else "unavailable"
+        if AGENT_AVAILABLE:
+            try:
+                if _agent is None:
+                    get_agent()
+                agent_status = "initialized" if _agent is not None else "available"
+            except:
+                agent_status = "error"
+        
+        return {
+            "status": "healthy",
+            "agent_available": AGENT_AVAILABLE,
+            "agent_status": agent_status,
+            "agent_type": "simple_agent"
+        }
 
 @app.post("/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
-    """에이전트가 자동으로 뉴스 검색 또는 LLM 생성 선택"""
+    """통합 에이전트 시스템으로 쿼리 처리 (우선) 또는 기존 에이전트 (폴백)"""
     try:
-        agent = get_agent()
-        
-        chat_history = None
-        if request.chat_history:
-            try:
-                from langchain_core.messages import HumanMessage, AIMessage
-                chat_history = []
-                for msg in request.chat_history:
-                    if msg.get("role") == "user":
-                        chat_history.append(HumanMessage(content=msg.get("content", "")))
-                    elif msg.get("role") == "assistant":
-                        chat_history.append(AIMessage(content=msg.get("content", "")))
-            except ImportError as e:
-                print(f"Warning: langchain_core.messages import failed: {e}")
-                chat_history = None
-        
-        answer = agent.run(request.query, chat_history=chat_history)
-        
-        # 판단 결과 추출 (간단히 키워드로 판단)
-        method = "api_search" if any(kw in request.query.lower() for kw in ["검색", "찾아", "뉴스", "기사", "최신", "오늘"]) else "llm_generate"
-        
-        return QueryResponse(answer=answer, method=method)
+        # 통합 에이전트 시스템 사용 (우선)
+        if INTEGRATED_AGENT_AVAILABLE:
+            graph = get_integrated_agent()
+            
+            # 쿼리 실행
+            result = run_query(
+                graph=graph,
+                user_query=request.query,
+                chat_history=request.chat_history
+            )
+            
+            answer = result.get("answer", "답변 생성 실패")
+            method = "integrated_rag"
+            
+            # 추가 정보 추출
+            query_analysis = result.get("query_analysis", {})
+            sub_queries = query_analysis.get("sub_queries", [])
+            
+            is_relevant = result.get("is_relevant_enough", False)
+            relevance_score = result.get("relevance_score", 0.0)
+            
+            es_results = result.get("es_results", {})
+            es_count = es_results.get("total", 0)
+            
+            naver_count = len(result.get("naver_results", []))
+            
+            return QueryResponse(
+                answer=answer,
+                method=method,
+                sub_queries=sub_queries,
+                is_relevant_enough=is_relevant,
+                relevance_score=relevance_score,
+                es_results_count=es_count,
+                naver_results_count=naver_count
+            )
+        else:
+            # 폴백: 기존 에이전트
+            agent = get_agent()
+            
+            chat_history = None
+            if request.chat_history:
+                try:
+                    from langchain_core.messages import HumanMessage, AIMessage
+                    chat_history = []
+                    for msg in request.chat_history:
+                        if msg.get("role") == "user":
+                            chat_history.append(HumanMessage(content=msg.get("content", "")))
+                        elif msg.get("role") == "assistant":
+                            chat_history.append(AIMessage(content=msg.get("content", "")))
+                except ImportError as e:
+                    print(f"Warning: langchain_core.messages import failed: {e}")
+                    chat_history = None
+            
+            answer = agent.run(request.query, chat_history=chat_history)
+            
+            # 판단 결과 추출 (간단히 키워드로 판단)
+            method = "api_search" if any(kw in request.query.lower() for kw in ["검색", "찾아", "뉴스", "기사", "최신", "오늘"]) else "llm_generate"
+            
+            return QueryResponse(answer=answer, method=method)
+            
     except HTTPException:
         raise
     except Exception as e:
@@ -118,10 +224,15 @@ async def process_query(request: QueryRequest):
 @app.post("/clear-history")
 async def clear_history():
     """대화 기록 초기화"""
+    # 통합 에이전트는 각 요청마다 chat_history를 받으므로 서버 측 메모리 초기화 불필요
+    # 하지만 호환성을 위해 유지
     try:
-        agent = get_agent()
-        agent.clear_memory()
-        return {"message": "Chat history cleared"}
+        if INTEGRATED_AGENT_AVAILABLE:
+            return {"message": "Chat history cleared (client-side only)"}
+        else:
+            agent = get_agent()
+            agent.clear_memory()
+            return {"message": "Chat history cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
