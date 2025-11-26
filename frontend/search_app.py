@@ -271,9 +271,43 @@ def main():
             method = result.get("method", "unknown")
             
             # 방법 배지 표시
-            method_class = "api-search" if method == "api_search" else "llm-generate"
-            method_text = "🔍 API 검색 사용" if method == "api_search" else "💡 LLM 생성 사용"
+            if method == "integrated_rag":
+                method_class = "api-search"
+                method_text = "🤖 통합 RAG 시스템 사용"
+            elif method == "api_search":
+                method_class = "api-search"
+                method_text = "🔍 API 검색 사용"
+            else:
+                method_class = "llm-generate"
+                method_text = "💡 LLM 생성 사용"
+            
             st.markdown(f'<span class="method-badge {method_class}">{method_text}</span>', unsafe_allow_html=True)
+            
+            # 통합 RAG 시스템 추가 정보 표시
+            if method == "integrated_rag":
+                with st.expander("🔍 검색 상세 정보", expanded=False):
+                    sub_queries = result.get("sub_queries", [])
+                    if sub_queries:
+                        st.write("**생성된 서브쿼리:**")
+                        for i, sq in enumerate(sub_queries, 1):
+                            st.write(f"{i}. {sq}")
+                    
+                    is_relevant = result.get("is_relevant_enough", None)
+                    relevance_score = result.get("relevance_score", None)
+                    es_count = result.get("es_results_count", 0)
+                    naver_count = result.get("naver_results_count", 0)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("ES 검색 결과", f"{es_count}개")
+                        st.metric("Naver 검색 결과", f"{naver_count}개")
+                    with col2:
+                        if relevance_score is not None:
+                            st.metric("관련성 점수", f"{relevance_score:.2f}")
+                        if is_relevant is not None:
+                            status = "✅ 충분" if is_relevant else "⚠️ 부족"
+                            st.metric("관련성 판단", status)
+            
             st.markdown("---")
             
             # 검색 결과 파싱 시도

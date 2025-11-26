@@ -1,124 +1,152 @@
 # Agentic News RAG
 
-에이전트가 자동으로 뉴스 검색 vs LLM 생성을 판단하는 시스템
+프론트엔드에서 질문을 입력하면 백엔드의 RAG 에이전트가 자동으로 내부 DB 검색과 웹 검색을 판단하여 최적의 답변을 생성합니다.
 
-## 🎯 기능
+## 빠른 시작
 
-- **자동 판단**: 사용자 쿼리를 분석하여 API 검색 또는 LLM 생성 자동 선택
-- **뉴스 검색**: Naver API를 통한 최신 뉴스 검색
-- **LLM 생성**: 무료 LLM(Ollama)을 사용한 답변 생성
-- **멀티턴 대화**: 대화 기록 유지 및 후속 질문 지원
+### 1. 저장소 클론
+```bash
+git clone https://github.com/kipple99/Agentic-News_RAG.git
+cd Agentic-News_RAG
+```
 
-## 📋 판단 기준
-
-### API 검색이 선택되는 경우
-- "오늘 경제 뉴스 검색해줘"
-- "최근 IT 뉴스 찾아줘"
-- "이번 주 부동산 뉴스"
-
-### LLM 생성이 선택되는 경우
-- "뉴스란 무엇인가요?"
-- "뉴스와 기사의 차이는?"
-- "뉴스의 역할을 설명해줘"
-
-## 🚀 빠른 시작
-
-### 1. 패키지 설치
-
+### 2. 패키지 설치
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Backend 서버 실행
+모든 필수 패키지가 `requirements.txt`에 포함되어 있습니다.
 
+### 3. 환경 변수 설정
+
+프로젝트 루트에 `.env` 파일을 생성하여 환경 변수를 설정하세요:
+
+```env
+# OpenAI API 키 (필수)
+OPENAI_API_KEY=sk-proj-...
+
+# Gemini API 키 (필수)
+GEMINI_API_KEY=...
+
+# Naver API 키 (필수)
+NAVER_CLIENT_ID=...
+NAVER_CLIENT_SECRET=...
+
+# Elasticsearch 설정 (선택사항, 없으면 웹 검색만 사용)
+ELASTICSEARCH_HOST=localhost
+ELASTICSEARCH_PORT=9200
+```
+
+또는 `backend/config.py` 파일을 직접 수정할 수 있습니다. 환경 변수가 설정되어 있으면 우선 사용됩니다.
+
+### 4. Elasticsearch 설정 (선택사항)
+
+Elasticsearch가 없어도 웹 검색만으로 동작합니다. ES를 사용하려면:
+
+#### Docker로 실행 (권장)
+```bash
+docker run -d \
+  --name elasticsearch \
+  -p 9200:9200 \
+  -p 9300:9300 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+```
+
+#### ES 인덱싱 (데이터가 있는 경우)
+```bash
+cd backend/rag
+python es_indexer.py  # 데이터 경로 지정 필요
+```
+
+### 5. 백엔드 서버 실행
 ```bash
 cd backend
 python app.py
-# 또는
-run_server.bat
 ```
 
 서버가 `http://localhost:8000`에서 실행됩니다.
 
-### 3. Frontend 실행
-
-새 터미널에서:
-
+### 6. 프론트엔드 실행 (새 터미널)
 ```bash
 cd frontend
 streamlit run search_app.py
-# 또는
-run_app.bat
 ```
 
-브라우저에서 `http://localhost:8501`이 자동으로 열립니다.
+프론트엔드가 `http://localhost:8501`에서 실행됩니다.
 
-## 📁 프로젝트 구조
+### 7. 사용하기
+
+1. 브라우저에서 `http://localhost:8501` 접속
+2. 질문 입력 (예: "오늘의 자동차 관련 뉴스 탑 3 알려줘")
+3. "Search" 버튼 클릭
+4. 답변 확인
+
+## 프로젝트 구조
 
 ```
 Agentic-News_RAG/
 ├── backend/
 │   ├── app.py                 # FastAPI 서버
-│   ├── agent/                 # 에이전트 모듈
-│   │   ├── news_agent.py     # 메인 에이전트
-│   │   └── llm_factory.py    # LLM 팩토리
-│   ├── external/
-│   │   └── naver_client.py   # Naver API 클라이언트
-│   └── config.py             # 설정
+│   ├── config.py              # 환경 설정
+│   ├── agent/                 # LLM 팩토리
+│   ├── external/              # 외부 API 클라이언트
+│   ├── search/                # Elasticsearch 검색
+│   └── rag/                   # RAG 워크플로우
+│       ├── integrated_graph.py    # 메인 워크플로우
+│       ├── nodes/                 # 각 단계별 노드
+│       ├── prompts/               # 프롬프트 템플릿
+│       ├── cache/                 # 캐싱 시스템
+│       ├── logging/               # 로깅 시스템
+│       └── utils/                 # 유틸리티
 ├── frontend/
-│   ├── search_app.py         # Streamlit UI
-│   └── run_app.bat           # Frontend 실행 배치
-└── requirements.txt          # 패키지 목록
+│   └── search_app.py          # Streamlit UI
+└── docs/
+    ├── STRUCTURE_GUIDE.md     # 상세 구조 가이드
+    └── PROMPT_ENHANCEMENT_GUIDE.md  # 프롬프트 가이드
 ```
 
-## 🔧 설정
+## 주요 기능
 
-### Naver API 키 (선택사항)
+### 1. 지능형 검색 전략
+- 쿼리 분석을 통한 검색 전략 자동 결정
+- 내부 DB 검색 vs 웹 검색 자동 판단
+- 시간 민감성 자동 감지
 
-`backend/config.py`에 기본값이 설정되어 있거나 환경 변수로 설정:
+### 2. 하이브리드 검색
+- Elasticsearch Hybrid Search (BM25 + Dense Vector)
+- Naver API + DuckDuckGo 병렬 검색
+- 검색 결과 재순위화
 
-```bash
-set NAVER_CLIENT_ID=your_client_id
-set NAVER_CLIENT_SECRET=your_client_secret
-```
+### 3. 품질 향상 기능
+- 소스 인용 및 출처 표시
+- 캐싱 시스템 (LRU, TTL)
+- 상세한 로깅 시스템
+- 답변 검증
 
-### OpenAI 모델 변경
+## 문제 해결
 
-`backend/app.py`에서 모델 이름 변경:
+### 백엔드 실행 오류
+- **ImportError**: 필요한 패키지가 설치되지 않았습니다. `pip install -r requirements.txt` 실행
+- **API Key Error**: `backend/config.py`에서 API 키를 확인하세요
+- **Elasticsearch 연결 실패**: ES가 없어도 웹 검색만으로 동작합니다. 경고 메시지는 무시해도 됩니다
 
-```python
-_agent = create_news_agent(model_type="openai", model_name="gpt-4")  # 또는 gpt-3.5-turbo
-```
+### 프론트엔드 연결 오류
+- 백엔드 서버가 실행 중인지 확인 (`http://localhost:8000`)
+- CORS 오류가 발생하면 `backend/app.py`의 CORS 설정 확인
 
-## 💡 사용 예제
-
-1. **뉴스 검색**: "오늘 경제 뉴스 검색해줘" → API 검색 실행
-2. **일반 질문**: "뉴스란 무엇인가요?" → LLM이 답변 생성
-3. **후속 질문**: 이전 대화를 기반으로 답변
-
-## 🛠️ 문제 해결
-
-### Backend 연결 오류
-- Backend 서버가 실행 중인지 확인
-- 포트 8000이 사용 가능한지 확인
-
-### OpenAI API 오류
-- `backend/config.py`에서 API 키 확인
-- OpenAI 계정에서 API 사용량 확인
+### 검색 결과가 없을 때
+- Naver API 키가 올바른지 확인
 - 네트워크 연결 확인
+- 백엔드 로그 확인
 
-### 패키지 오류
-```bash
-pip install --upgrade langchain langchain-community langchain-core
-```
+## 추가 문서
 
-## 📝 기술 스택
+- [STRUCTURE_GUIDE.md](docs/STRUCTURE_GUIDE.md) - 상세한 구조 및 워크플로우 설명
+- [PROMPT_ENHANCEMENT_GUIDE.md](docs/PROMPT_ENHANCEMENT_GUIDE.md) - 프롬프트 튜닝 가이드
 
-- **Backend**: FastAPI, LangChain
-- **Frontend**: Streamlit
-- **LLM**: OpenAI GPT-3.5-turbo
-- **검색 API**: Naver News API
+## 라이선스
 
-## 📄 라이선스
+MIT License
 
-교육 목적으로 제작되었습니다.
