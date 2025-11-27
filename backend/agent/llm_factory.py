@@ -14,7 +14,7 @@ class LLMFactory:
     """무료 LLM 모델 팩토리 클래스"""
     
     @staticmethod
-    def create_llm(model_type: str = "ollama", **kwargs) -> BaseChatModel:
+    def create_llm(model_type: str = "openai", **kwargs) -> BaseChatModel:
         """
         LLM 모델 생성
         
@@ -109,7 +109,7 @@ class LLMFactory:
                 raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
             
             return ChatGoogleGenerativeAI(
-                model=kwargs.get('model_name', 'gemini-pro'),
+                model=kwargs.get('model_name', 'gemini-1.5-flash'),
                 google_api_key=api_key,
                 temperature=kwargs.get('temperature', 0.7),
             )
@@ -151,19 +151,19 @@ class LLMFactory:
     
     @staticmethod
     def get_default_llm() -> BaseChatModel:
-        """기본 LLM 반환 (Gemini 우선, 없으면 OpenAI, 그 다음 Ollama, Hugging Face)"""
-        # Gemini 시도 (기본값)
-        try:
-            return LLMFactory._create_gemini_llm()
-        except Exception as e:
-            print(f"Gemini LLM 생성 실패: {e}, OpenAI 시도...")
-            pass
-        
-        # OpenAI 시도 (Gemini가 없을 때)
+        """기본 LLM 반환 (OpenAI 우선, 없으면 Gemini, 그 다음 Ollama, Hugging Face)"""
+        # OpenAI 시도 (기본값)
         try:
             return LLMFactory._create_openai_llm()
         except Exception as e:
-            print(f"OpenAI LLM 생성 실패: {e}, Ollama 시도...")
+            print(f"[WARN] OpenAI LLM 생성 실패: {e}, Gemini 시도...")
+            pass
+        
+        # Gemini 시도 (OpenAI가 없을 때)
+        try:
+            return LLMFactory._create_gemini_llm()
+        except Exception as e:
+            print(f"[WARN] Gemini LLM 생성 실패: {e}, Ollama 시도...")
             pass
         
         # Ollama 시도
@@ -180,6 +180,6 @@ class LLMFactory:
         
         raise RuntimeError(
             "사용 가능한 LLM 모델을 찾을 수 없습니다. "
-            "GEMINI_API_KEY 또는 OPENAI_API_KEY를 설정하거나 Ollama를 설치해주세요."
+            "OPENAI_API_KEY 또는 GEMINI_API_KEY를 설정하거나 Ollama를 설치해주세요."
         )
 

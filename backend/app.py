@@ -70,7 +70,7 @@ def get_integrated_agent():
         try:
             _graph, _llm, _es_client, _embedder = initialize_agent_system(
                 es_index="rag_news_db",
-                llm_model_type="gemini"
+                llm_model_type="openai"
             )
             print("[OK] Integrated agent system initialized successfully")
         except Exception as e:
@@ -90,7 +90,7 @@ def get_agent() -> Any:
         if not AGENT_AVAILABLE:
             raise HTTPException(status_code=503, detail="Agent not available. Please check if langchain packages are installed.")
         try:
-            _agent = create_news_agent(model_type="openai", model_name="gpt-3.5-turbo", use_memory=True)
+            _agent = create_news_agent(model_type="gemini", use_memory=True)
             print("Agent initialized successfully")
         except Exception as e:
             import traceback
@@ -239,4 +239,5 @@ async def clear_history():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
