@@ -10,12 +10,12 @@ from typing import Optional
 # 환경 변수가 설정되어 있으면 우선 사용, 없으면 기본값 사용
 NAVER_CLIENT_ID: Optional[str] = os.getenv(
     'NAVER_CLIENT_ID',
-    '2bmqIIx_yzk2giL30srA'  # 기본값 (개발용)
+    'W9YBV_Igm7Bax1pOvqQH'  # 기본값
 )
 
 NAVER_CLIENT_SECRET: Optional[str] = os.getenv(
     'NAVER_CLIENT_SECRET',
-    'nUDzJcr8Da'  # 기본값 (개발용)
+    'h83M6tp73P'  # 기본값
 )
 
 # Google API 설정 (선택사항)
@@ -23,17 +23,18 @@ GOOGLE_API_KEY: Optional[str] = os.getenv('GOOGLE_API_KEY', None)
 GOOGLE_SEARCH_ENGINE_ID: Optional[str] = os.getenv('GOOGLE_SEARCH_ENGINE_ID', None)
 
 # ElasticSearch 설정
-ELASTICSEARCH_HOST: str = os.getenv('ELASTICSEARCH_HOST', 'localhost')
+ELASTICSEARCH_HOST: str = os.getenv('ELASTICSEARCH_HOST', '127.0.0.1')
 ELASTICSEARCH_PORT: int = int(os.getenv('ELASTICSEARCH_PORT', '9200'))
+ES_INDEX: str = os.getenv('ES_INDEX', 'rag_news_db')
 
 # LLM 설정
 # Gemini API Key (기본값으로 사용)
-GEMINI_API_KEY: Optional[str] = os.getenv('GEMINI_API_KEY', None)
+GEMINI_API_KEY: Optional[str] = os.getenv('GEMINI_API_KEY', 'GEMINI_API_KEY-A')
 
-# OpenAI API Key (Gemini가 없을 때 사용)
+# OpenAI API Key (기본값으로 사용)
 OPENAI_API_KEY: Optional[str] = os.getenv(
     'OPENAI_API_KEY',
-    None)
+    'OPENAI_API_KEY')  # 기본값
 
 # 서버 설정
 SERVER_HOST: str = os.getenv('SERVER_HOST', '0.0.0.0')
@@ -41,4 +42,5 @@ SERVER_PORT: int = int(os.getenv('SERVER_PORT', '8000'))
 
 # 로깅 설정
 LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
+
 

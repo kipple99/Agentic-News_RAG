@@ -1,10 +1,9 @@
 """
-통합 LangGraph 에이전트
-이미지 워크플로우에 맞춘 통합 그래프
+통합 RAG 에이전트 워크플로우
+LangGraph를 사용한 에이전트 시스템
 """
 
-import os
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple
 from langgraph.graph import StateGraph, END
 from langchain_core.language_models import BaseChatModel
 from elasticsearch import Elasticsearch
@@ -20,38 +19,54 @@ from rag.nodes import (
     generate_answer
 )
 from agent.llm_factory import LLMFactory
-from config import (
-    ELASTICSEARCH_HOST,
-    ELASTICSEARCH_PORT,
-    GEMINI_API_KEY,
-    OPENAI_API_KEY
-)
+from config import ELASTICSEARCH_HOST, ELASTICSEARCH_PORT
+
+
+def _make_result_serializable(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    result 딕셔너리를 JSON 직렬화 가능한 형태로 변환
+    SearchResult 객체를 딕셔너리로 변환
+    """
+    serializable = {}
+    for key, value in result.items():
+        if key == "naver_results" and isinstance(value, list):
+            # SearchResult 객체 리스트를 딕셔너리 리스트로 변환
+            serializable[key] = [
+                {
+                    "title": item.title if hasattr(item, 'title') else str(item),
+                    "link": item.link if hasattr(item, 'link') else "",
+                    "snippet": item.snippet if hasattr(item, 'snippet') else "",
+                    "source": item.source if hasattr(item, 'source') else "",
+                    "published_date": item.published_date if hasattr(item, 'published_date') else None
+                } if hasattr(item, 'title') else item
+                for item in value
+            ]
+        elif isinstance(value, dict):
+            serializable[key] = _make_result_serializable(value)
+        elif isinstance(value, list):
+            serializable[key] = [
+                _make_result_serializable(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            serializable[key] = value
+    return serializable
 
 
 def should_search_naver(state: AgentState) -> str:
     """
-    관련성 판단 후 분기 결정 함수 (노트북 방식)
-    
-    Args:
-        state: 현재 상태
+    관련성 판단 결과에 따라 웹 검색 여부 결정
     
     Returns:
         "naver_search" 또는 "build_context"
     """
-    # 노트북 방식: need_websearch 리스트가 비어있지 않으면 웹 검색 필요
-    need_web = state.get("need_websearch", [])
     is_relevant = state.get("is_relevant_enough", False)
+    need_websearch = state.get("need_websearch", [])
     
-    print(f"\n[분기 결정] 관련성 판단 결과:")
-    print(f"   need_websearch: {len(need_web)}개 쿼리")
-    print(f"   is_relevant_enough: {is_relevant}")
-    
-    # 둘 다 확인 (안전성)
-    if len(need_web) > 0 or not is_relevant:
-        print(f"   결정: naver_search (웹 검색 필요)")
+    # 관련성이 충분하지 않거나 웹 검색이 필요한 경우
+    if not is_relevant or len(need_websearch) > 0:
         return "naver_search"
     else:
-        print(f"   결정: build_context (내부 DB로 충분)")
         return "build_context"
 
 
@@ -61,7 +76,7 @@ def create_integrated_agent_graph(
     es_index: str = "rag_news_db",
     embedder: Optional[SentenceTransformer] = None,
     embedding_model_name: str = "all-MiniLM-L6-v2",
-    llm_model_type: str = "gemini"
+    llm_model_type: str = "openai"
 ) -> StateGraph:
     """
     통합 에이전트 그래프 생성
@@ -82,7 +97,7 @@ def create_integrated_agent_graph(
         es_index: Elasticsearch 인덱스 이름
         embedder: 임베딩 모델 (None이면 자동 생성)
         embedding_model_name: 임베딩 모델 이름
-        llm_model_type: LLM 모델 타입 ("gemini", "openai", "ollama" 등)
+        llm_model_type: LLM 모델 타입 ("openai", "gemini", "ollama" 등)
     
     Returns:
         컴파일된 LangGraph 객체
@@ -98,7 +113,18 @@ def create_integrated_agent_graph(
     # Elasticsearch 클라이언트 초기화
     if es_client is None:
         es_host = f"http://{ELASTICSEARCH_HOST}:{ELASTICSEARCH_PORT}"
-        es_client = Elasticsearch(hosts=[es_host])
+        try:
+            es_client = Elasticsearch(hosts=[es_host], request_timeout=5)
+            # 연결 테스트
+            if not es_client.ping():
+                print(f"[WARN] Elasticsearch 연결 실패 ({es_host}). 웹 검색만 사용합니다.")
+                es_client = None
+            else:
+                print(f"[OK] Elasticsearch 연결 성공: {es_host}")
+        except Exception as e:
+            print(f"[WARN] Elasticsearch 연결 실패: {e}")
+            print(f"   -> 웹 검색만 사용하여 동작합니다.")
+            es_client = None
     
     # 임베딩 모델 초기화
     if embedder is None:
@@ -169,7 +195,7 @@ def create_integrated_agent_graph(
 def initialize_agent_system(
     es_index: str = "rag_news_db",
     embedding_model_name: str = "all-MiniLM-L6-v2",
-    llm_model_type: str = "gemini"
+    llm_model_type: str = "openai"
 ) -> Tuple[StateGraph, BaseChatModel, Optional[Elasticsearch], Optional[SentenceTransformer]]:
     """
     에이전트 시스템 초기화
@@ -252,24 +278,30 @@ def run_query(
     # 로깅 초기화
     logger = None
     if enable_logging:
-        from rag.logging import get_logger
-        logger = get_logger()
-        logger.log_query_start(user_query)
+        try:
+            from rag.logging.agent_logger import get_logger
+            logger = get_logger()
+            logger.log_query_start(user_query)
+        except ImportError:
+            pass
     
     # 캐싱 확인
     cache = None
     if use_cache:
-        from rag.cache import get_cache
-        cache = get_cache()
-        cached_result = cache.get(user_query, {"chat_history": chat_history})
-        if cached_result:
-            if logger:
-                logger.log_cache_hit(user_query)
-            print("\n[INFO] 캐시에서 결과를 반환합니다.")
-            return cached_result
-        else:
-            if logger:
-                logger.log_cache_miss(user_query)
+        try:
+            from rag.cache.query_cache import get_cache
+            cache = get_cache()
+            cached_result = cache.get(user_query, {"chat_history": chat_history})
+            if cached_result:
+                if logger:
+                    logger.log_cache_hit(user_query)
+                print("\n[INFO] 캐시에서 결과를 반환합니다.")
+                return cached_result
+            else:
+                if logger:
+                    logger.log_cache_miss(user_query)
+        except ImportError:
+            pass
     
     print("\n" + "="*80)
     print("RAG AGENT 실행 시작")
@@ -282,20 +314,20 @@ def run_query(
     if chat_history is None:
         chat_history = []
     
-        initial_state: AgentState = {
-            "user_query": user_query,
-            "chat_history": chat_history,
-            "query_analysis": {},
-            "es_results": {},
-            "is_relevant_enough": False,
-            "relevance_score": 0.0,
-            "need_websearch": [],  # 노트북 방식 추가
-            "naver_results": [],
-            "web_results": {},  # 노트북 방식 추가
-            "context": "",
-            "sources": [],  # 소스 정보 추가
-            "answer": ""
-        }
+    initial_state: AgentState = {
+        "user_query": user_query,
+        "chat_history": chat_history,
+        "query_analysis": {},
+        "es_results": {},
+        "is_relevant_enough": False,
+        "relevance_score": 0.0,
+        "need_websearch": [],
+        "naver_results": [],
+        "web_results": {},
+        "context": "",
+        "sources": [],
+        "answer": ""
+    }
     
     try:
         print(f"\n[INFO] LangGraph 실행 중...\n")
@@ -306,55 +338,60 @@ def run_query(
         # 통계 수집
         stats = {
             "execution_time": total_elapsed,
-            "es_results": result.get('es_results', {}).get('total', 0),
-            "relevance_score": result.get('relevance_score', 0.0),
-            "web_search_count": len(result.get('naver_results', [])),
-            "sources_count": len(result.get('sources', [])),
-            "answer_length": len(result.get('answer', ''))
+            "query_analysis": result.get("query_analysis", {}),
+            "es_results_count": result.get("es_results", {}).get("total", 0),
+            "naver_results_count": len(result.get("naver_results", [])),
+            "is_relevant_enough": result.get("is_relevant_enough", False),
+            "relevance_score": result.get("relevance_score", 0.0)
         }
         
-        # 캐시에 저장
-        if cache:
-            cache.set(user_query, result, {"chat_history": chat_history})
+        print("\n" + "="*80)
+        print("RAG AGENT 실행 완료")
+        print("="*80)
+        print(f"총 소요 시간: {total_elapsed:.2f}초")
+        print(f"ES 검색 결과: {stats['es_results_count']}개")
+        print(f"Naver 검색 결과: {stats['naver_results_count']}개")
+        print(f"관련성 점수: {stats['relevance_score']:.2f}")
+        print("="*80 + "\n")
         
         # 로깅
         if logger:
+            answer = result.get("answer", "")
             logger.log_query_end(
-                user_query,
-                result.get('answer', ''),
-                total_elapsed,
+                query=user_query,
+                answer=answer,
+                execution_time=total_elapsed,
                 stats=stats
             )
         
-        print("\n" + "="*80)
-        print("[OK] RAG AGENT 실행 완료")
-        print("="*80)
-        print(f"총 소요 시간: {total_elapsed:.2f}초")
-        print(f"실행 단계 요약:")
-        print(f"   1. [OK] 쿼리 분석")
-        print(f"   2. [OK] 내부 DB 검색 (ES 결과: {stats['es_results']}개)")
-        print(f"   3. [OK] 관련성 판단 (점수: {stats['relevance_score']:.4f})")
-        if result.get('need_websearch'):
-            print(f"   4. [OK] 웹 검색 (Naver 결과: {stats['web_search_count']}개)")
-        else:
-            print(f"   4. [SKIP] 웹 검색 건너뜀")
-        print(f"   5. [OK] 컨텍스트 구축")
-        print(f"   6. [OK] 답변 생성")
-        print(f"   7. [OK] 소스 추출 ({stats['sources_count']}개)")
-        print(f"\n최종 답변:")
-        print(f"   {result.get('answer', 'N/A')[:500]}...")
-        print("="*80 + "\n")
+        # 캐싱 저장 (SearchResult 객체를 딕셔너리로 변환)
+        if cache:
+            # result를 직렬화 가능한 형태로 변환
+            serializable_result = _make_result_serializable(result)
+            cache.set(user_query, {"chat_history": chat_history}, serializable_result)
         
         return result
+        
     except Exception as e:
         total_elapsed = time.time() - total_start_time
-        print(f"\n[ERROR] 그래프 실행 실패 (소요 시간: {total_elapsed:.2f}초)")
-        print(f"   오류: {e}")
+        error_msg = f"그래프 실행 실패 (소요 시간: {total_elapsed:.2f}초)\n   오류: {str(e)}"
+        print(f"\n[ERROR] {error_msg}")
+        
         import traceback
         traceback.print_exc()
-        print("="*80 + "\n")
+        
+        if logger:
+            import traceback as tb
+            error_context = f"Query: {user_query}\nTraceback: {tb.format_exc()}"
+            logger.log_error(Exception(str(e)), context=error_context)
+        
         return {
             "answer": f"오류 발생: {str(e)}",
-            "error": str(e)
+            "error": str(e),
+            "query_analysis": {},
+            "es_results": {"total": 0},
+            "naver_results": [],
+            "is_relevant_enough": False,
+            "relevance_score": 0.0
         }
 
