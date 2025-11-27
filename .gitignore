@@ -38,7 +38,7 @@ ENV/
 .env.local
 
 # API Keys (config.py는 제외하되, 실제 키는 환경 변수 사용 권장)
-backend/config.py
+# config.py
 
 # OS
 .DS_Store
