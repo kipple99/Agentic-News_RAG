@@ -384,7 +384,12 @@ def main():
             
             st.markdown("---")
             
-            # 내부 DB 결과 파싱 및 표시
+            # 답변은 항상 표시
+            st.markdown("### 💬 답변")
+            st.markdown(answer)
+            st.markdown("---")
+            
+            # 내부 DB 결과 파싱 및 표시 (내부 DB에서 정보를 가져올 때만)
             internal_db_results = parse_internal_db_results(result.get("internal_db_results"))
             if internal_db_results and len(internal_db_results) > 0:
                 st.markdown("### 📚 내부 DB 검색 결과")
@@ -396,28 +401,32 @@ def main():
                 
                 st.markdown("---")
             
-            # 검색 결과 파싱 시도 (Naver 검색 결과)
-            search_results = parse_search_results(answer)
+            # Naver 검색 결과 표시 (백엔드에서 직접 받은 결과 우선, 없으면 answer에서 파싱)
+            naver_results_from_backend = result.get("naver_results", [])
+            search_results = []
             
-            if search_results and len(search_results) > 0 and method == "api_search":
-                # 검색 결과가 있으면 카드 형태로 표시
+            if naver_results_from_backend and len(naver_results_from_backend) > 0:
+                # 백엔드에서 직접 받은 Naver 결과 사용
+                for item in naver_results_from_backend:
+                    search_results.append(SearchResult(
+                        title=item.get("title", "제목 없음"),
+                        link=item.get("link", ""),
+                        snippet=item.get("snippet", ""),
+                        source=item.get("source", "Naver"),
+                        published_date=item.get("published_date")
+                    ))
+            else:
+                # 백엔드에서 결과가 없으면 answer에서 파싱 시도
+                search_results = parse_search_results(answer)
+            
+            if search_results and len(search_results) > 0:
+                # Naver 검색 결과가 있으면 카드 형태로 표시 (기존 요약 기능 유지)
                 st.markdown("### 🔍 웹 검색 결과 (Naver)")
                 st.success(f"✅ {len(search_results)}개의 웹 검색 결과를 찾았습니다")
                 st.markdown("---")
                 
                 for i, result_item in enumerate(search_results, 1):
-                    display_result(result_item, i)
-            
-            # 답변 표시 (내부 DB 결과나 웹 검색 결과가 없거나, LLM 생성 답변인 경우)
-            if (not internal_db_results or len(internal_db_results) == 0) and \
-               (not search_results or len(search_results) == 0):
-                st.markdown("### 💬 답변")
-                # 답변을 더 읽기 쉽게 표시
-                st.markdown(answer)
-            elif answer and (internal_db_results or search_results):
-                # 결과가 있어도 답변을 표시 (선택적)
-                with st.expander("💬 생성된 답변 보기", expanded=False):
-                    st.markdown(answer)
+                    display_result(result_item, i)  # 기존 함수 사용 (요약 기능 포함, 클릭 시 네이버로 이동)
             
             # 대화 기록에 추가
             st.session_state.chat_history.append({"role": "user", "content": search_query})

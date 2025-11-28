@@ -162,6 +162,7 @@ class QueryResponse(BaseModel):
     es_results_count: Optional[int] = None
     naver_results_count: Optional[int] = None
     internal_db_results: Optional[List[Dict[str, Any]]] = None
+    naver_results: Optional[List[Dict[str, Any]]] = None
 
 @app.get("/health")
 async def health_check():
@@ -228,10 +229,25 @@ async def process_query(request: QueryRequest):
             es_results = result.get("es_results", {})
             es_count = es_results.get("total", 0)
             
-            naver_count = len(result.get("naver_results", []))
+            naver_results_raw = result.get("naver_results", [])
+            naver_count = len(naver_results_raw)
             
             # 내부 DB 결과를 프론트엔드용 형태로 변환
             internal_db_results = convert_es_results_to_frontend_format(es_results, max_results=10)
+            
+            # Naver 결과를 프론트엔드용 형태로 변환
+            naver_results = []
+            for item in naver_results_raw:
+                if hasattr(item, 'title'):
+                    naver_results.append({
+                        "title": item.title,
+                        "link": item.link if hasattr(item, 'link') else "",
+                        "snippet": item.snippet if hasattr(item, 'snippet') else "",
+                        "source": item.source if hasattr(item, 'source') else "Naver",
+                        "published_date": item.published_date if hasattr(item, 'published_date') else None
+                    })
+                elif isinstance(item, dict):
+                    naver_results.append(item)
             
             return QueryResponse(
                 answer=answer,
@@ -241,7 +257,8 @@ async def process_query(request: QueryRequest):
                 relevance_score=relevance_score,
                 es_results_count=es_count,
                 naver_results_count=naver_count,
-                internal_db_results=internal_db_results
+                internal_db_results=internal_db_results,
+                naver_results=naver_results
             )
         else:
             # 폴백: 기존 에이전트
