@@ -22,6 +22,17 @@ class SearchResult:
     source: str
     published_date: Optional[str] = None
 
+@dataclass
+class InternalDBResult:
+    """내부 DB 검색 결과 데이터 클래스"""
+    title: str
+    text: str
+    url: str
+    date: str
+    score: float
+    es_score: float
+    source_type: str = "internal_db"
+
 st.set_page_config(
     page_title="Agentic News RAG - News Search",
     page_icon="🔍",
@@ -148,6 +159,67 @@ def clear_history():
         pass
     st.session_state.chat_history = []
 
+def parse_internal_db_results(internal_db_results: Optional[List[Dict]]) -> List[InternalDBResult]:
+    """백엔드에서 받은 내부 DB 결과 파싱"""
+    if not internal_db_results:
+        return []
+    
+    results = []
+    for item in internal_db_results:
+        results.append(InternalDBResult(
+            title=item.get("title", "제목 없음"),
+            text=item.get("text", ""),
+            url=item.get("url", ""),
+            date=item.get("date", ""),
+            score=item.get("score", 0.0),
+            es_score=item.get("es_score", 0.0),
+            source_type=item.get("source_type", "internal_db")
+        ))
+    
+    return results
+
+def display_internal_db_result(result: InternalDBResult, index: int):
+    """내부 DB 결과 카드 표시 (클릭 시 expander로 상세 정보 표시)"""
+    # 카드 형태로 제목과 요약 표시
+    st.markdown(f"### {index}. {result.title}")
+    
+    # 요약 (텍스트의 처음 200자)
+    snippet = result.text[:200] + "..." if len(result.text) > 200 else result.text
+    if snippet:
+        st.markdown(f"**요약:** {snippet}")
+    
+    # 메타데이터 표시
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if result.date:
+            st.caption(f"📅 {result.date}")
+        else:
+            st.caption("📅 날짜 없음")
+    with col2:
+        st.caption(f"📊 관련성 점수: {result.score:.4f}")
+    with col3:
+        st.caption("📚 출처: 내부DB정보")
+    
+    # 클릭 시 상세 정보를 보여주는 expander
+    with st.expander("📖 전체 내용 및 상세 정보 보기", expanded=False):
+        st.markdown("#### 📋 메타데이터")
+        metadata_col1, metadata_col2 = st.columns(2)
+        with metadata_col1:
+            st.write(f"**제목:** {result.title}")
+            st.write(f"**날짜:** {result.date if result.date else '날짜 없음'}")
+            if result.url:
+                st.write(f"**원본 URL:** {result.url}")
+        with metadata_col2:
+            st.write(f"**관련성 점수 (RRF):** {result.score:.4f}")
+            st.write(f"**Elasticsearch 점수:** {result.es_score:.4f}")
+            st.write(f"**출처 타입:** {result.source_type}")
+        
+        st.markdown("---")
+        st.markdown("#### 📄 전체 내용")
+        st.text_area("", value=result.text, height=300, disabled=True, key=f"internal_db_text_{index}")
+    
+    st.markdown("---")
+
 def parse_search_results(answer: str) -> List[SearchResult]:
     """에이전트 응답에서 검색 결과 파싱"""
     results = []
@@ -175,11 +247,13 @@ def parse_search_results(answer: str) -> List[SearchResult]:
                     title = line
             # 제목에서 불필요한 부분 제거
             title = title.replace('제목:', '').strip()
+            # 출처를 동적으로 판단 (기본값은 Naver)
+            source = "Naver"
             current_result = SearchResult(
                 title=title,
                 link="",
                 snippet="",
-                source="Naver",
+                source=source,
                 published_date=None
             )
         elif current_result:
@@ -310,21 +384,40 @@ def main():
             
             st.markdown("---")
             
-            # 검색 결과 파싱 시도
+            # 내부 DB 결과 파싱 및 표시
+            internal_db_results = parse_internal_db_results(result.get("internal_db_results"))
+            if internal_db_results and len(internal_db_results) > 0:
+                st.markdown("### 📚 내부 DB 검색 결과")
+                st.success(f"✅ {len(internal_db_results)}개의 내부 DB 검색 결과를 찾았습니다")
+                st.markdown("---")
+                
+                for i, db_result in enumerate(internal_db_results, 1):
+                    display_internal_db_result(db_result, i)
+                
+                st.markdown("---")
+            
+            # 검색 결과 파싱 시도 (Naver 검색 결과)
             search_results = parse_search_results(answer)
             
             if search_results and len(search_results) > 0 and method == "api_search":
                 # 검색 결과가 있으면 카드 형태로 표시
-                st.success(f"✅ {len(search_results)}개의 검색 결과를 찾았습니다")
+                st.markdown("### 🔍 웹 검색 결과 (Naver)")
+                st.success(f"✅ {len(search_results)}개의 웹 검색 결과를 찾았습니다")
                 st.markdown("---")
                 
                 for i, result_item in enumerate(search_results, 1):
                     display_result(result_item, i)
-            else:
-                # LLM 생성 답변 또는 일반 텍스트
+            
+            # 답변 표시 (내부 DB 결과나 웹 검색 결과가 없거나, LLM 생성 답변인 경우)
+            if (not internal_db_results or len(internal_db_results) == 0) and \
+               (not search_results or len(search_results) == 0):
                 st.markdown("### 💬 답변")
                 # 답변을 더 읽기 쉽게 표시
                 st.markdown(answer)
+            elif answer and (internal_db_results or search_results):
+                # 결과가 있어도 답변을 표시 (선택적)
+                with st.expander("💬 생성된 답변 보기", expanded=False):
+                    st.markdown(answer)
             
             # 대화 기록에 추가
             st.session_state.chat_history.append({"role": "user", "content": search_query})

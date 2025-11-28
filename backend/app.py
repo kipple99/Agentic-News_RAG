@@ -99,6 +99,56 @@ def get_agent() -> Any:
             raise HTTPException(status_code=503, detail=f"Failed to initialize agent: {str(e)}")
     return _agent
 
+def convert_es_results_to_frontend_format(es_results: Dict[str, Any], max_results: int = 10) -> List[Dict[str, Any]]:
+    """
+    Elasticsearch 결과를 프론트엔드용 형태로 변환
+    
+    Args:
+        es_results: es_results 딕셔너리 (queries와 total 포함)
+        max_results: 최대 반환 결과 수
+    
+    Returns:
+        프론트엔드용 내부 DB 결과 리스트
+    """
+    internal_db_results = []
+    queries_results = es_results.get("queries", {})
+    
+    # 모든 쿼리 결과를 통합하여 상위 결과 추출
+    all_hits = []
+    for query, result in queries_results.items():
+        hits = result.get("hits", {}).get("hits", [])
+        for hit in hits:
+            source = hit.get("_source", {})
+            score = hit.get("_score", 0.0)
+            
+            # RRF 점수가 있으면 사용 (RRF fusion 결과)
+            rrf_score = hit.get("rrf_score", score)
+            
+            all_hits.append({
+                "title": source.get("title", source.get("source", "제목 없음")),
+                "text": source.get("text", source.get("content", "")),
+                "url": source.get("url", ""),
+                "date": source.get("date", ""),
+                "score": rrf_score,
+                "es_score": score,
+                "source_type": "internal_db"
+            })
+    
+    # 점수 기준으로 정렬 (내림차순)
+    all_hits.sort(key=lambda x: x["score"], reverse=True)
+    
+    # 중복 제거 (제목 기준) 및 상위 결과만 선택
+    seen_titles = set()
+    for hit in all_hits:
+        if len(internal_db_results) >= max_results:
+            break
+        title = hit["title"]
+        if title not in seen_titles:
+            seen_titles.add(title)
+            internal_db_results.append(hit)
+    
+    return internal_db_results
+
 class QueryRequest(BaseModel):
     query: str
     chat_history: Optional[List[Dict[str, str]]] = None
@@ -111,6 +161,7 @@ class QueryResponse(BaseModel):
     relevance_score: Optional[float] = None
     es_results_count: Optional[int] = None
     naver_results_count: Optional[int] = None
+    internal_db_results: Optional[List[Dict[str, Any]]] = None
 
 @app.get("/health")
 async def health_check():
@@ -179,6 +230,9 @@ async def process_query(request: QueryRequest):
             
             naver_count = len(result.get("naver_results", []))
             
+            # 내부 DB 결과를 프론트엔드용 형태로 변환
+            internal_db_results = convert_es_results_to_frontend_format(es_results, max_results=10)
+            
             return QueryResponse(
                 answer=answer,
                 method=method,
@@ -186,7 +240,8 @@ async def process_query(request: QueryRequest):
                 is_relevant_enough=is_relevant,
                 relevance_score=relevance_score,
                 es_results_count=es_count,
-                naver_results_count=naver_count
+                naver_results_count=naver_count,
+                internal_db_results=internal_db_results
             )
         else:
             # 폴백: 기존 에이전트
